@@ -1,44 +1,27 @@
 """
-Invest Broker — Backend (ma'lumotlar markazi)
+Invest Broker — Backend (ma'lumotlar markazi), Flask asosida.
 
-Bu kichik server mini-app'dan kelgan kirim-chiqim yozuvlarini
-saqlaydi (SQLite bazada), shunda:
-- Mijoz istalgan qurilmadan kirsa, o'sha ma'lumotlarni ko'radi
-- Bot har oy oxirida bu ma'lumotlar asosida hisobotni AVTOMATIK hisoblab,
-  mijozga Telegram orqali o'zi yuborishi mumkin bo'ladi
-
-Hech qanday tashqi API (bank, soliq.uz va h.k.) kerak emas —
-faqat mijozning botga kiritgan o'z ma'lumotlari ishlatiladi.
+Bu versiya ataylab Flask bilan yozilgan (pydantic/FastAPI emas),
+chunki ba'zi hosting xizmatlarida yangi Python versiyalari bilan
+pydantic o'rnatilishida compilyatsiya xatosi chiqishi mumkin.
+Flask'da bunday muammo umuman bo'lmaydi.
 
 O'RNATISH:
   pip install -r requirements.txt
-  python main.pyfastapi==0.115.0
-uvicorn==0.30.6
-pydantic==2.9.2
-
-Server manzili: http://0.0.0.0:8000
-(Buni ham mini-app kabi https bilan internetga chiqarish kerak —
- masalan Render.com, Railway.app kabi bepul xizmatlar orqali.)
+  python main.py
 """
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 DB_PATH = "data.db"
 
-app = FastAPI(title="Invest Broker Backend")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # mini-app har qanday domendan chaqira oladi
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = Flask(__name__)
+CORS(app)
 
 
 @contextmanager
@@ -83,59 +66,56 @@ def init_db():
 init_db()
 
 
-class Transaction(BaseModel):
-    user_id: str
-    type: str  # "income" | "expense"
-    amount: float
-    category: str = ""
-    date: str  # "YYYY-MM-DD"
-
-
-class Rates(BaseModel):
-    user_id: str
-    vat: float = 12
-    property_rate: float = 2
-    property_value: float = 0
-    profit: float = 15
-
-
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return jsonify({"status": "ok"})
 
 
 @app.post("/transactions")
-def add_transaction(tx: Transaction):
-    if tx.type not in ("income", "expense"):
-        raise HTTPException(400, "type 'income' yoki 'expense' bo'lishi kerak")
+def add_transaction():
+    data = request.get_json(force=True)
+    user_id = data.get("user_id")
+    tx_type = data.get("type")
+    amount = data.get("amount")
+    category = data.get("category", "")
+    date = data.get("date")
+
+    if not user_id or tx_type not in ("income", "expense") or amount is None or not date:
+        return jsonify({"error": "user_id, type (income/expense), amount, date majburiy"}), 400
+
     with get_db() as conn:
         conn.execute(
             "INSERT INTO transactions (user_id, type, amount, category, date, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (tx.user_id, tx.type, tx.amount, tx.category, tx.date, datetime.utcnow().isoformat()),
+            (user_id, tx_type, float(amount), category, date, datetime.now(timezone.utc).isoformat()),
         )
-    return {"status": "saqlandi"}
+    return jsonify({"status": "saqlandi"})
 
 
-@app.get("/transactions/{user_id}")
-def list_transactions(user_id: str):
+@app.get("/transactions/<user_id>")
+def list_transactions(user_id):
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM transactions WHERE user_id = ? ORDER BY date DESC, id DESC",
             (user_id,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return jsonify([dict(r) for r in rows])
 
 
-@app.delete("/transactions/{tx_id}")
-def delete_transaction(tx_id: int):
+@app.delete("/transactions/<int:tx_id>")
+def delete_transaction(tx_id):
     with get_db() as conn:
         conn.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
-    return {"status": "o'chirildi"}
+    return jsonify({"status": "o'chirildi"})
 
 
 @app.post("/rates")
-def set_rates(r: Rates):
+def set_rates():
+    data = request.get_json(force=True)
+    user_id = data.get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id majburiy"}), 400
+
     with get_db() as conn:
         conn.execute(
             """
@@ -147,18 +127,24 @@ def set_rates(r: Rates):
                 property_value=excluded.property_value,
                 profit=excluded.profit
             """,
-            (r.user_id, r.vat, r.property_rate, r.property_value, r.profit),
+            (
+                user_id,
+                float(data.get("vat", 12)),
+                float(data.get("property_rate", 2)),
+                float(data.get("property_value", 0)),
+                float(data.get("profit", 15)),
+            ),
         )
-    return {"status": "saqlandi"}
+    return jsonify({"status": "saqlandi"})
 
 
-@app.get("/rates/{user_id}")
-def get_rates(user_id: str):
+@app.get("/rates/<user_id>")
+def get_rates(user_id):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM rates WHERE user_id = ?", (user_id,)).fetchone()
     if not row:
-        return {"user_id": user_id, "vat": 12, "property_rate": 2, "property_value": 0, "profit": 15}
-    return dict(row)
+        return jsonify({"user_id": user_id, "vat": 12, "property_rate": 2, "property_value": 0, "profit": 15})
+    return jsonify(dict(row))
 
 
 @app.get("/all-user-ids")
@@ -166,10 +152,8 @@ def all_user_ids():
     """Bot har oy shu ro'yxatni olib, har bir mijozga hisobot yuborish uchun ishlatadi."""
     with get_db() as conn:
         rows = conn.execute("SELECT DISTINCT user_id FROM transactions").fetchall()
-    return [r["user_id"] for r in rows]
+    return jsonify([r["user_id"] for r in rows])
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    app.run(host="0.0.0.0", port=8000)
