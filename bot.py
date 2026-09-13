@@ -10,10 +10,7 @@ O'RNATISH:
 3) python bot.py
 
 ESLATMA: WEBAPP_URL httpS bo'lishi SHART (Telegram talabi).
-app/index.html faylini biror hostingga (masalan GitHub Pages,python-telegram-bot[job-queue]==21.4
-httpx==0.27.2
-flask==3.0.3
-
+app/index.html faylini biror hostingga (masalan GitHub Pages,
 Vercel, Netlify) joylab, shu havolani shu yerga qo'ying.
 """
 
@@ -168,6 +165,14 @@ async def remind_daily(context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    # Python 3.14'da asosiy thread uchun asyncio event loop avtomatik
+    # yaratilmasligi mumkin, shuning uchun uni qo'lda tayyorlab qo'yamiz.
+    import asyncio
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     threading.Thread(target=_run_health_server, daemon=True).start()
 
     app = Application.builder().token(BOT_TOKEN).build()
