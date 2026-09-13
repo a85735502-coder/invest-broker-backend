@@ -17,11 +17,29 @@ from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import httpx
 
 DB_PATH = "data.db"
 
 app = Flask(__name__)
 CORS(app)
+
+# ====== Soliq.uz Markaziy ma'lumotlar bazasi integratsiyasi ======
+SOLIQ_API_URL = "http://my-api.soliq.local/remote-access-api/company/info/%s"
+SOLIQ_SECRET_KEY = "095d754a-229b-4180-aafa-75c3264eb8e9"
+SOLIQ_STIR = "304841343"
+# ====================================================================
+
+
+@app.get("/soliq-info")
+def soliq_info():
+    """Soliq.uz'ning ochiq ma'lumotlar bazasidan firma haqida ma'lumot oladi."""
+    url = SOLIQ_API_URL % SOLIQ_STIR
+    try:
+        resp = httpx.get(url, headers={"Authorization": SOLIQ_SECRET_KEY}, timeout=10)
+        return jsonify(resp.json())
+    except Exception as e:
+        return jsonify({"error": f"Soliq.uz API'ga ulanib bo'lmadi: {e}"}), 502
 
 
 @contextmanager
